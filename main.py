@@ -4,15 +4,43 @@ from machine import ADC
 import pycom
 import time
 import sys
-pycom.heartbeat(False)
 
+pycom.heartbeat(False)
 host=''
 port=80
 
-#Parámetros: calibración del sensor wl400
-Vmin=763        #~205mV
-V1=856          #~230mV
-h1=14           #altura[cm] correspondiente a V1
+#configFile: lee los valores de configuracion de la memoria flash,
+#existen dos archivos de configuracion: wl400_00 y wl400_01, el 1ero se crea
+#por defecto con parámetros pre-establecidos, y el 2do se crea al momento de
+#calibrar el dispositivo por medio del wifi.
+def configFile():
+    try:
+        files=os.listdir('configFile')
+        lenFile=len(files)
+
+        if files[lenFile-1]=='wl400_0'+str(lenFile-1):
+            print('configFile a leer:', files[lenFile-1])
+            f = open('/flash/configFile/wl400_0'+str(lenFile-1), 'r')
+            config=f.readall()
+            f.close()
+    except Exception as e:#MyError:
+        print("configFile doesn't exist")
+        #Parámetros: calibración del sensor wl400 (valores obtenidos en basea mediciones, pueden ser modificados)
+        Vmin=763        #~205mV
+        V1=856          #~230mV
+        h1=14           #altura[cm] correspondiente a V1
+        m=pendiente(Vmin,V1,h1)
+        config=str(Vmin)+'_'+str(m)
+        #creación del directorio configFile que contendrá los archivos wl400_0x
+        os.mkdir('/flash/configFile')
+        writeFile(1,config)
+        time.sleep(0.1)
+    return config
+
+def writeFile(numFile,config):
+        f = open('/flash/configFile/wl400_0'+str(numFile-1), 'w')
+        f.write(config)
+        f.close()
 
 #method:cálculo de la pendiente
 def pendiente(Vmin,Vx,hx):
@@ -20,7 +48,8 @@ def pendiente(Vmin,Vx,hx):
     #aquí:código para almacenar en la flash m y Vmin
     return m
 
-#
+#calibrationType: Llamado desde el method:wifi, redirecciona a los métodos:
+#calibrationType, h0Calibration, o h1Calibration. Según sea el parámetro a calibrar
 def calibrationType(argCalibration):
     print('argCalibration', argCalibration)
     switcher = {
@@ -32,6 +61,8 @@ def calibrationType(argCalibration):
     return func()                       # Execute the function
 
 def h0Calibration():
+    
+    writeFile(2,config)
     msg='altura inicial calibrada en LoPy'
     pycom.rgbled(False)
     return True,msg
@@ -47,7 +78,7 @@ def finishCalibration():
     return False,msg
 
 def wifi():
-    print('into wifi')
+    print('wifi init')
     pycom.rgbled(0x008B8B) # blue
     wlan = WLAN(mode=WLAN.AP, ssid='wipy-wlan', auth=(WLAN.WPA2,'ucuenca1234'), channel=7, antenna=WLAN.INT_ANT)
     serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -64,7 +95,7 @@ def wifi():
     wifiSocket=True
 
     while (wifiSocket):
-        print('into while')
+        print('socket init')
         sc, addr = serversocket.accept()
         print('sc: ',sc,' addr: ',addr)
 
@@ -103,10 +134,12 @@ def waterLevel(Vmin,m,Vx):
     return hx
 
 
-m=pendiente(Vmin,V1,h1)
-print('pendiente: ',m)
+
+print('init program')
+config=configFile()
+print('config parameters: ',config)
 
 
-wifi()
+#wifi()
 #Vx=adc()
 #waterLevel(Vmin,m,Vx)
