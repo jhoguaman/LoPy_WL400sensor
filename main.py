@@ -1,11 +1,10 @@
 from network import WLAN
 from machine import ADC, RTC, Timer
+import struct
 import socket
 import pycom
 import time
 import sys
-
-
 
 
 pycom.heartbeat(False)
@@ -13,8 +12,8 @@ host=''
 port=80
 
 pathConfigFile='/flash/configFile/wl400_0'
-pathLogs='/flash/Logs/wl'
-pathCurrentFile='/flash/Logs/currentFile'
+pathLogs='/flash/logsDir/wl'
+pathCurrentFile='/flash/logsDir/currentFile'
 
 #clockSynchronization: Sincronización del rtc con el dateTime recibido por el gps
 def clockSynchronization(dateTime):
@@ -34,11 +33,11 @@ def configFile():
         if files[lenFile-1]=='wl400_0'+str(lenFile):
             print('configFile a leer:', files[lenFile-1])
             config=readFile(pathConfigFile,lenFile)
-
     except Exception as e:#MyError:
         print("configFile doesn't exist")
         #Parámetros: calibración del sensor wl400 (valores obtenidos en basea mediciones, pueden ser modificados)
-        Vmin=763        #~205mV
+        #Vmin=763        #~205mV
+        Vmin=0        #solo para hacer pruebas y no de valores negativos ya que el sensor no esta conectado
         V1=856          #~230mV
         h1=14           #altura[cm] correspondiente a V1
         config=generateConfig(Vmin,V1,h1)
@@ -47,6 +46,15 @@ def configFile():
         writeFile(pathConfigFile,'w',1,config)
         time.sleep(0.1)
     return config
+
+def logsDir():
+    try:
+        print('reading logsDir')
+        files=os.listdir('logsDir')
+    except Exception as e:
+        print("logsDir doesn't exist")
+        os.mkdir('/flash/logsDir')
+        time.sleep(0.1)
 
 def readFile(path,numFile):
     f = open(path+str(numFile), 'r')
@@ -89,7 +97,7 @@ def h1Calibration(hx):
     Vmin=readFile(pathConfigFile,2)
     if Vmin.find('_')!=-1:
         Vmin=Vmin[:Vmin.find('_')]
-    config=generateConfig(int(Vmin),int(Vx),int(hx[1:]))
+    config=generateConfig(int(Vmin),int(Vx),float(hx[1:]))
     writeFile(pathConfigFile,'w',2,config)
     msg='hx calibrado en LoPy'
     return True,msg
@@ -152,38 +160,34 @@ def adc():
 
 #waterLevel:Calcula la profundidad del agua, Vx:nuevo valor del sensor,
 #config: contiene los valores de Vmin y m correspondiente a los parametros de la
-#ecuación lineal
+#ecuación lineal, retorna hxInt es el valor int incluido el un decimal
 def waterLevel(config,Vx):
     Vmin=config[:config.find('_')]
     m=config[config.find('_')+1:]
     hx=(Vx-int(Vmin))/float(m)
     print('altura Vx: ',hx)
-    return hx
+    hxInt=int(hx*10)                 #1decimal a recuperar
+    hxBin=struct.pack('H',hxInt)
+    return hxBin
 
-class Clock():
+def _transmissionAlarm(alarm):
+    print("alarma 10seg ")
+    timeStamp=rtc.now()
+    print(timeStamp[:6])
+    global transmissionMain
+    transmissionMain=True
 
-    def __init__(self):
-        self.seconds = 0
-        self.__alarm = Timer.Alarm(self._seconds_handler, 10, periodic=True)
-        self.__alarm2 = Timer.Alarm(self._seconds_handler2, 60, periodic=True)
+def _measurementAlarm(alarm):
+    print("alarma 20seg")
+    timeStamp=rtc.now()
+    print(timeStamp[:6])
+    global measurementMain
+    measurementMain=True
 
-    def _seconds_handler(self, alarm):
-        print("alarma 10seg ")
-        timeStamp=rtc.now()
-        print(timeStamp[:6])
-        Vx=adc()
-        waterLevel(config,Vx)
-
-
-#        if self.seconds == 2:
-#        alarm.cancel() # stop counting after 10 seconds
-
-
-    def _seconds_handler2(self, alarm):
-        print("alarma 60seg")
-        timeStamp=rtc.now()
-        print(timeStamp[:6])
-
+def activeAlarm():
+    transmissionAlarm = Timer.Alarm(_transmissionAlarm, 10, periodic=True)
+    measurementAlarm = Timer.Alarm(_measurementAlarm, 5, periodic=True)
+    return transmissionAlarm, measurementAlarm
 
 rtc = RTC()
 dateTime=(2014, 5, 1, 4, 13, 0, 0, 0)
@@ -192,9 +196,29 @@ clockSynchronization(dateTime)
 print('init program')
 config=configFile()
 print('config parameters: ',config)
+logsDir()
 
-clock = Clock()
 #wifi()
 
-#Vx=adc()
-#waterLevel(config,Vx)
+#ACTIVAR LA ALARMA
+#transmissionAlarm, measurementAlarm=activeAlarm()
+
+transmissionMain=False
+measurementMain=False
+
+while True:
+    time.sleep(5)
+    Vx=adc()
+    hxBin=waterLevel(config,Vx)
+    writeFile(pathCurrentFile,'ab','',hxBin)
+
+    if transmissionMain:
+        print('transmision de datos LoRa')
+        transmissionMain=False
+
+    if measurementMain:
+        print('mediciones del nivel de agua')
+        measurementMain=False
+
+    #transmissionAlarm.cancel()
+    #measurementAlarm.cancel()
