@@ -6,11 +6,15 @@ import pycom
 import time
 import sys
 
-
 pycom.heartbeat(False)
+
+#************host-port:comunicación vía socket con la app ************
 host=''
 port=80
-
+#*********************************************************************
+#pathConfigFile:archivo de configuracion, contiene el Vmin y la pendiente
+#pathLogs:directorio donde se almacenan archivos diarios con info de avg,min,max de cada 5min
+#pathCurrentFile:
 pathConfigFile='/flash/configFile/wl400_0'
 pathLogs='/flash/logsDir/wl'
 pathCurrentFile='/flash/logsDir/currentFile'
@@ -172,25 +176,31 @@ def waterLevel(config,Vx):
     return hxBin
 
 def _transmissionAlarm(alarm):
-    print("alarma 10seg ")
+#    print("alarma 20seg ")
     global timeStamp
     timeStamp=rtc.now()
-
+#    print(timeStamp[:7])
     global transmissionMain
     transmissionMain=True
 
 def _measurementAlarm(alarm):
-    print("alarma 20seg")
-#    timeStamp_measurement=rtc.now()
-#    print(timeStamp_measurement[:6])
+#    print("alarma 5seg")
+    global timeStamp_measurement
+    timeStamp_measurement=rtc.now()
+#    print(timeStamp_measurement[:7])
     global measurementMain
     measurementMain=True
 
-def activeAlarm():
-    measurementAlarm = Timer.Alarm(_measurementAlarm, 5, periodic=True)
-    transmissionAlarm = Timer.Alarm(_transmissionAlarm, 20, periodic=True)
+def activeAlarmM():
+    measurementAlarm = Timer.Alarm(_measurementAlarm, 10.0, periodic=True)
+    return measurementAlarm
 
-    return transmissionAlarm, measurementAlarm
+def activeAlarmT():
+    transmissionAlarm = Timer.Alarm(_transmissionAlarm, 60.0, periodic=True)
+    return transmissionAlarm
+
+def loraTransmission(value):
+    pass
 
 #statisticValue: recibe la lista currentFileInt que contiene los valores tomados cada 10seg
 #y calcula los valores promedio, mínimo y máximo. Estos valores se empaquetan como binarios
@@ -204,8 +214,9 @@ def statisticValue(currentFileInt):
 
 
 rtc = RTC()
-dateTime=(2014, 5, 1, 4, 13, 0, 0, 0)
+dateTime=(2014, 5, 1, 4, 59, 40, 0, 0)
 clockSynchronization(dateTime)
+print('hora actual: ',rtc.now())
 
 print('init program')
 config=configFile()
@@ -214,15 +225,24 @@ logsDir()
 
 #wifi()
 
+calibAlarm=True
+while calibAlarm:
+    timeStamp1=rtc.now()
+    if (timeStamp1[5]/10)-int(timeStamp1[5]/10)==0:
+        calibAlarm=False
 #ACTIVAR LA ALARMA**********************************
-transmissionAlarm, measurementAlarm=activeAlarm()
+measurementAlarm = activeAlarmM()
+#transmissionAlarm =activeAlarmT()
 #***************************************************
 
 transmissionMain=False
 measurementMain=False
+
+sendTime=1      #tiempo para hacer la transmision en minutos
+storeTime=3     #almacenamiento de datosS cada hora
 #os.remove('logsDir/currentFile')
 #tm=os.stat('logsDir/currentFile')[6]   #tamaño de un archivo
-typeWrite="ab"
+typeWrite="wb"
 while True:
 #for cycles in range(0): # stop after 10 cycles
 
@@ -232,28 +252,34 @@ while True:
         Vx=adc()
         hxBin=waterLevel(config,Vx)
         writeFile(pathCurrentFile,typeWrite,'',hxBin)
-        time.sleep(1.5)
+        #time.sleep(1.5)
+        print(timeStamp_measurement)
 
-        #leer datos int para corroborar el almacenamiento*********
-        #*********************************************************
-        currentFileBin=readFile(pathCurrentFile,'rb','')
-        tmFile=os.stat('logsDir/currentFile')[6]
-        fmt='H'*(int(tmFile/2))
-        currentFileInt=struct.unpack(fmt,currentFileBin)
-        print(currentFileInt)
-        #*********************************************************
+        if (timeStamp_measurement[4]/sendTime)-int(timeStamp_measurement[4]/sendTime)==0 and timeStamp_measurement[5]==0:
+            transmissionMain=True
+
         typeWrite="ab"
         measurementMain=False
 
 
     if transmissionMain:
         print('transmision de datos LoRa')
-        value=statisticValue(currentFileInt)
+        #leer datos int para corroborar el almacenamiento*********
+        #*********************************************************
+        currentFileBin=readFile(pathCurrentFile,'rb','')
+        tmFile=os.stat('logsDir/currentFile')[6]
+        fmt='H'*(int(tmFile/2))
+        currentFileInt=struct.unpack(fmt,currentFileBin)
+        #print(currentFileInt)
+        #*********************************************************
+        value=statisticValue(currentFileInt)            #value variable binaria: contiene 2bytes 1byte 1byte--> avg,min,max respectivamente
+
+        loraTransmission(value)
         print('valores estadisticos: ',value)
-        timeStampEpoch=timeStamp[4]*60+timeStamp[5]
-
-        fecha=str(timeStamp[0])+str(timeStamp[1])+str(timeStamp[4])+'.log'
-
+        #timeStampEpoch=timeStamp[4]*60+timeStamp[5]
+        #print(timeStamp)
+        #if (timeStamp_measurement[4]/storeTime)-int(timeStamp_measurement[4]/storeTime)==0 and timeStamp_measurement[5]==0:
+        fecha=str(timeStamp_measurement[0])+str(timeStamp_measurement[1])+str(timeStamp_measurement[3])+'.log'
         print(fecha)
         writeFile(pathLogs,"ab",fecha,value)
         typeWrite="wb"          #luego de la trasmision y el almacenamiento de value que representa el resultado del currentFile. se sobreescribe el currentFile
