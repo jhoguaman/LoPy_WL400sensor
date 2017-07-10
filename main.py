@@ -32,7 +32,7 @@ def configFile():
         print('leer :', files[lenFile-1])
         if files[lenFile-1]=='wl400_0'+str(lenFile):
             print('configFile a leer:', files[lenFile-1])
-            config=readFile(pathConfigFile,lenFile)
+            config=readFile(pathConfigFile,'r',lenFile)
     except Exception as e:#MyError:
         print("configFile doesn't exist")
         #Parámetros: calibración del sensor wl400 (valores obtenidos en basea mediciones, pueden ser modificados)
@@ -51,13 +51,14 @@ def logsDir():
     try:
         print('reading logsDir')
         files=os.listdir('logsDir')
+        os.remove(pathCurrentFile)
     except Exception as e:
         print("logsDir doesn't exist")
         os.mkdir('/flash/logsDir')
         time.sleep(0.1)
 
-def readFile(path,numFile):
-    f = open(path+str(numFile), 'r')
+def readFile(path,mode,numFile):
+    f = open(path+str(numFile), mode)
     config=f.readall()
     f.close()
     return config
@@ -94,7 +95,7 @@ def h0Calibration(none):
 
 def h1Calibration(hx):
     Vx=adc()
-    Vmin=readFile(pathConfigFile,2)
+    Vmin=readFile(pathConfigFile,'r',2)
     if Vmin.find('_')!=-1:
         Vmin=Vmin[:Vmin.find('_')]
     config=generateConfig(int(Vmin),int(Vx),float(hx[1:]))
@@ -165,29 +166,42 @@ def waterLevel(config,Vx):
     Vmin=config[:config.find('_')]
     m=config[config.find('_')+1:]
     hx=(Vx-int(Vmin))/float(m)
-    print('altura Vx: ',hx)
     hxInt=int(hx*10)                 #1decimal a recuperar
+    print('altura Vx: ',hxInt)
     hxBin=struct.pack('H',hxInt)
     return hxBin
 
 def _transmissionAlarm(alarm):
     print("alarma 10seg ")
+    global timeStamp
     timeStamp=rtc.now()
-    print(timeStamp[:6])
+
     global transmissionMain
     transmissionMain=True
 
 def _measurementAlarm(alarm):
     print("alarma 20seg")
-    timeStamp=rtc.now()
-    print(timeStamp[:6])
+#    timeStamp_measurement=rtc.now()
+#    print(timeStamp_measurement[:6])
     global measurementMain
     measurementMain=True
 
 def activeAlarm():
-    transmissionAlarm = Timer.Alarm(_transmissionAlarm, 10, periodic=True)
     measurementAlarm = Timer.Alarm(_measurementAlarm, 5, periodic=True)
+    transmissionAlarm = Timer.Alarm(_transmissionAlarm, 20, periodic=True)
+
     return transmissionAlarm, measurementAlarm
+
+#statisticValue: recibe la lista currentFileInt que contiene los valores tomados cada 10seg
+#y calcula los valores promedio, mínimo y máximo. Estos valores se empaquetan como binarios
+#siendo su tamaño 2, 1 y 1 bytes respectivamente.
+def statisticValue(currentFileInt):
+    avgVal=int(sum(currentFileBin)/len(currentFileBin))
+    maxDel=max(currentFileBin)-avgVal
+    minDel=avgVal-min(currentFileBin)
+    value=struct.pack('HBB',avgVal,minDel,maxDel)
+    return value
+
 
 rtc = RTC()
 dateTime=(2014, 5, 1, 4, 13, 0, 0, 0)
@@ -200,25 +214,54 @@ logsDir()
 
 #wifi()
 
-#ACTIVAR LA ALARMA
-#transmissionAlarm, measurementAlarm=activeAlarm()
+#ACTIVAR LA ALARMA**********************************
+transmissionAlarm, measurementAlarm=activeAlarm()
+#***************************************************
 
 transmissionMain=False
 measurementMain=False
-
+#os.remove('logsDir/currentFile')
+#tm=os.stat('logsDir/currentFile')[6]   #tamaño de un archivo
+typeWrite="ab"
 while True:
-    time.sleep(5)
-    Vx=adc()
-    hxBin=waterLevel(config,Vx)
-    writeFile(pathCurrentFile,'ab','',hxBin)
+#for cycles in range(0): # stop after 10 cycles
 
-    if transmissionMain:
-        print('transmision de datos LoRa')
-        transmissionMain=False
 
     if measurementMain:
         print('mediciones del nivel de agua')
+        Vx=adc()
+        hxBin=waterLevel(config,Vx)
+        writeFile(pathCurrentFile,typeWrite,'',hxBin)
+        time.sleep(1.5)
+
+        #leer datos int para corroborar el almacenamiento*********
+        #*********************************************************
+        currentFileBin=readFile(pathCurrentFile,'rb','')
+        tmFile=os.stat('logsDir/currentFile')[6]
+        fmt='H'*(int(tmFile/2))
+        currentFileInt=struct.unpack(fmt,currentFileBin)
+        print(currentFileInt)
+        #*********************************************************
+        typeWrite="ab"
         measurementMain=False
+
+
+    if transmissionMain:
+        print('transmision de datos LoRa')
+        value=statisticValue(currentFileInt)
+        print('valores estadisticos: ',value)
+        timeStampEpoch=timeStamp[4]*60+timeStamp[5]
+
+        fecha=str(timeStamp[0])+str(timeStamp[1])+str(timeStamp[4])+'.log'
+
+        print(fecha)
+        writeFile(pathLogs,"ab",fecha,value)
+        typeWrite="wb"          #luego de la trasmision y el almacenamiento de value que representa el resultado del currentFile. se sobreescribe el currentFile
+        transmissionMain=False
+
+
+
+
 
     #transmissionAlarm.cancel()
     #measurementAlarm.cancel()
