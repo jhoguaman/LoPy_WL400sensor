@@ -41,7 +41,7 @@ def configFile():
         print('lenFile :', lenFile)
         print('leer :', files[lenFile-1])
         if files[lenFile-1]=='wl400_0'+str(lenFile):
-            if os.stat(pathConfigFile+str(lenFile))==8:
+            if os.stat(pathConfigFile+str(lenFile))[6]==8:
                 print('configFile a leer:', pathConfigFile+str(lenFile))
                 config=readFile(pathConfigFile,'r',str(lenFile))
             else:
@@ -200,16 +200,21 @@ def _transmissionAlarm(alarm):
 
 #_measurementAlarm: alarma de mediciones (cada 10 Seg)
 def _measurementAlarm(alarm):
-    print("alarma 10seg")
+    print("measurement alarm")
+    global updateAlarm, measurementAlarm
+    if updateAlarm:
+        measurementAlarm.cancel()
+        measurementAlarm = activeAlarmM(measurementTime*60)
+        updateAlarm=False
     global timeStamp_measurement
     timeStamp_measurement=rtc.now()
-#    print(timeStamp_measurement[:7])
+    print(timeStamp_measurement[:7])
     global measurementMain
     measurementMain=True
 
-def activeAlarmM():
-    print('alarma activada cada 1o seg')
-    measurementAlarm = Timer.Alarm(_measurementAlarm, 10, periodic=True)
+def activeAlarmM(segM):
+    print('alarma activada cada',segM)
+    measurementAlarm = Timer.Alarm(_measurementAlarm, segM, periodic=True)
     return measurementAlarm
 
 def activeAlarmT():
@@ -244,10 +249,12 @@ def ads1115Read():
 def pin_handler(arg):
     print('ingreso pin han')
     print("got an interrupt in pin %s" % (arg.id()))
+    global wifiMain
+    wifiMain=True
 
 
 rtc = RTC()
-dateTime=(2014, 5, 1, 4, 59, 40, 0, 0)
+dateTime=(2014, 5, 1, 4, 58, 50, 0, 0)
 clockSynchronization(dateTime)
 print('hora actual: ',rtc.now())
 
@@ -259,53 +266,55 @@ print('equationParameters',equationParameters)
 logsDir()
 ads1115Write()
 
-#adc = ADC(id=0)
-#adc.init(bits=12)
-#adc_c = adc.channel(pin='P13',attn=ADC.ATTN_11DB)  #ADC pin input range is 0-3.3V with 11DB.
-#ADC.ATTN_0DB ADC.ATTN_2_5DB ADC.ATTN_6DB ADC.ATTN_11DB
-#global adc_c
-#adc_c = adc.channel(pin='P15',attn=ADC.ATTN_11DB)                      #ADC pin input range is 0-1.1V.
+def segAlarm():
+    timeStampM=rtc.now()
+    minM = measurementTime-(timeStampM[4] % measurementTime)
+    segM=minM*60-timeStampM[5]
+    return segM
 
-#espera en el while hasta que se encere la alarma
-calibAlarm=True
-while calibAlarm:
-    timeStamp1=rtc.now()
-    if (timeStamp1[5]/10)-int(timeStamp1[5]/10)==0:
-        calibAlarm=False
-#ACTIVAR LA ALARMA**********************************
-#measurementAlarm = activeAlarmM()
+global measurementTime, updateAlarm     #measurementTime: tiempo en minutos para la medida, updateAlarm: habilita la condición en measurementAlarm para reestablecer cada measurementTime.
+measurementTime=1
+updateAlarm =True
+
+segM=segAlarm()
+
+####ACTIVAR LA ALARMA**********************************
+measurementAlarm = activeAlarmM(segM)
 ###transmissionAlarm =activeAlarmT()
 #***************************************************
 
 transmissionMain=False
 measurementMain=False
 
-sendTime=1      #tiempo para hacer la transmision en minutos
-storeTime=3     #almacenamiento de datos cada hora (la poscicion 3 representa la hora)
+sendTime=3      #tiempo para hacer la transmision en minutos
+storeTime=3     #almacenamiento de datos cada hora (la poscicion 3 representa la hora- 2 el día)
 #os.remove('logsDir/currentFile')
 #tm=os.stat('logsDir/currentFile')[6]   #tamaño de un archivoos
 typeWrite="wb"
 
-wifiPrueba=False
+wifiMain=False
 
 p_in = Pin('P8', mode=Pin.IN, pull=Pin.PULL_UP)
-
 p_in.callback(Pin.IRQ_FALLING , pin_handler)
 
 while True:
-    # initialize ``P9`` in gpio mode and make it an output
-    print('esperando pin')
-    time.sleep(1)
-
-    #p_in = Pin('P10', mode=Pin.IN, pull=Pin.PULL_UP)
-    #p_in() # get value, 0 or 1
-
 #for cycles in range(0): # stop after 10 cycles
-    if wifiPrueba:
+    if wifiMain:
         measurementAlarm.cancel()
+        print('ingresa a la calibracion mediante WIFI, 5 segundos para desactivar')
+        #time.sleep(5)
         wifi()
-        measurementAlarm = activeAlarmM()
-        wifiPrueba=False
+        updateAlarm =True
+        segM=segAlarm()
+        measurementAlarm = activeAlarmM(segM)
+
+        print('init program: new configFile after wifi configuration')
+        config=configFile()
+        print('config parameters: ',ustruct.unpack('HHHH',config))
+        equationParameters=slope(config)
+        print('equationParameters',equationParameters)
+
+        wifiMain=False
 
     if measurementMain:
         measurementMain=False
